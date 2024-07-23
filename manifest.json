@@ -6,5 +6,6 @@
     "description": "Generate SEO-friendly descriptions for Markdown files using LLM",
     "author": "panzhixiang.com",
     "authorUrl": "https://panzhixiang.com",
-    "isDesktopOnly": false
+    "isDesktopOnly": false,
+    "license": "GPL-3.0-or-later"
 }

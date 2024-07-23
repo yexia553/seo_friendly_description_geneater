@@ -1,0 +1,10 @@
+{
+    "id": "obsidian-seo-friendly-description",
+    "name": "SEO-Friendly Description Generator",
+    "version": "1.0.0",
+    "minAppVersion": "0.12.0",
+    "description": "Generate SEO-friendly descriptions for Markdown files using LLM",
+    "author": "panzhixiang.com",
+    "authorUrl": "https://panzhixiang.com",
+    "isDesktopOnly": false
+}

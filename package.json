@@ -1,5 +1,5 @@
 {
-    "name": "obsidian-seo-friendly-description",
+    "name": "obsidian-seo-assistant",
     "version": "1.0.0",
     "description": "Generate SEO-friendly descriptions for Markdown files using LLM",
     "main": "main.js",
@@ -29,6 +29,6 @@
         "typescript": "4.7.4"
     },
     "dependencies": {
-        "axios": "^1.7.2"
+        "axios": "^1.6.5"
     }
 }

@@ -1,11 +1,11 @@
 {
-    "id": "seo-friendly-description",
-    "name": "SEO-Friendly Description Generator",
+    "id": "seo-assistant",
+    "name": "SEO-Assistant",
     "version": "1.0.0",
     "minAppVersion": "0.12.0",
-    "description": "Generate SEO-friendly descriptions for Markdown files using LLM",
-    "author": "panzhixiang.com",
-    "authorUrl": "https://panzhixiang.com",
+    "description": "Generate SEO-friendly descriptions and keywords for Markdown files using LLM",
+    "author": "panzhixiang.cn",
+    "authorUrl": "https://panzhixiang.cn",
     "isDesktopOnly": false,
     "license": "GPL-3.0-or-later"
 }

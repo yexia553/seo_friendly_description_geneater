@@ -1,10 +1,10 @@
 /**
- * SEO Friendly Description Generator
+ * SEO Assistant
  * An Obsidian plugin that generates SEO-friendly descriptions and keywords for markdown blog posts.
  * 
  * Features:
  * - Generates SEO-friendly descriptions and keywords in Chinese or English
- * - Supports custom prompts for description and keyword generation
+ * - Supports custom prompts and API endpoints
  * - Automatically updates frontmatter with generated content
  */
 
@@ -18,43 +18,27 @@ interface PluginSettings {
     maxTokens: number;
     temperature: number;
     language: 'zh' | 'en';
-    customDescriptionPrompt: string;
-    customKeywordsPrompt: string;
-    useCustomPrompts: boolean;
+    customPrompt: string;
 }
 
 const DEFAULT_SETTINGS: PluginSettings = {
     apiKey: '',
-    apiUrl: 'https://api.openai.com/v1/chat/completions',
-    model: 'gpt-3.5-turbo',
-    maxTokens: 150,
+    apiUrl: 'https://api.deepseek.com/v1/chat/completions',
+    model: 'deepseek-chat',
+    maxTokens: 500,
     temperature: 0.8,
     language: 'zh',
-    customDescriptionPrompt: '',
-    customKeywordsPrompt: '',
-    useCustomPrompts: false
+    customPrompt: ''
 }
 
 const DEFAULT_PROMPTS = {
-    description: {
-        zh: {
-            system: "你是一个SEO专家，请生成一段简洁、吸引人且对搜索引擎友好的中文描述，长度在100-150字之间。",
-            user: "请为以下内容生成描述：\n\n"
-        },
-        en: {
-            system: "You are an SEO expert. Generate a concise, engaging, and SEO-friendly description in English, between 50-80 words.",
-            user: "Generate a description for the following content:\n\n"
-        }
+    zh: {
+        system: "你是一个SEO专家。请为以下内容生成：\n1. 一段简洁、吸引人且对搜索引擎友好的中文描述（100-150字）\n2. 5-8个相关的中文关键词（用逗号分隔）\n\n请按照以下格式返回：\nDescription: [描述内容]\nKeywords: [关键词1, 关键词2, ...]",
+        user: "内容：\n\n"
     },
-    keywords: {
-        zh: {
-            system: "你是一个SEO专家，请生成5-8个相关的中文关键词，用逗号分隔。关键词应该准确反映内容主题，并具有搜索价值。",
-            user: "请为以下内容生成关键词：\n\n"
-        },
-        en: {
-            system: "You are an SEO expert. Generate 5-8 relevant English keywords, separated by commas. Keywords should accurately reflect the content and have search value.",
-            user: "Generate keywords for the following content:\n\n"
-        }
+    en: {
+        system: "You are an SEO expert. Please generate:\n1. A concise, engaging, and SEO-friendly description in English (50-80 words)\n2. 5-8 relevant keywords (comma-separated)\n\nPlease respond in the following format:\nDescription: [description content]\nKeywords: [keyword1, keyword2, ...], IMPORTANT: please respond in English",
+        user: "Content:\n\n"
     }
 };
 
@@ -66,7 +50,7 @@ export default class SEOFriendlyDescriptionPlugin extends Plugin {
 
         this.addCommand({
             id: 'generate-seo-description',
-            name: 'Generate SEO Description',
+            name: 'Generate Description and Keywords',
             editorCallback: (editor: Editor, view: MarkdownView) => {
                 this.generateDescription(editor, view);
             }
@@ -85,22 +69,18 @@ export default class SEOFriendlyDescriptionPlugin extends Plugin {
 
     async generateDescription(editor: Editor, view: MarkdownView) {
         const content = editor.getValue();
-        const description = await this.callAIAPI(content, 'description');
-        const keywords = await this.callAIAPI(content, 'keywords');
-
-        if (description && keywords) {
-            this.updateFrontmatter(editor, description, keywords);
+        const result = await this.callAIAPI(content);
+        if (result) {
+            this.updateFrontmatter(editor, result.description, result.keywords);
         }
     }
 
-    async callAIAPI(content: string, type: 'description' | 'keywords'): Promise<string> {
+    async callAIAPI(content: string): Promise<{ description: string; keywords: string } | null> {
         try {
             const { system: defaultSystemPrompt, user: defaultUserPrompt } = 
-                DEFAULT_PROMPTS[type][this.settings.language];
+                DEFAULT_PROMPTS[this.settings.language];
 
-            const systemPrompt = this.settings.useCustomPrompts
-                ? (type === 'description' ? this.settings.customDescriptionPrompt : this.settings.customKeywordsPrompt)
-                : defaultSystemPrompt;
+            const systemPrompt = this.settings.customPrompt || defaultSystemPrompt;
 
             const messages = [
                 { role: "system", content: systemPrompt },
@@ -123,11 +103,23 @@ export default class SEOFriendlyDescriptionPlugin extends Plugin {
                 }
             );
 
-            return response.data.choices[0].message.content.trim();
+            const result = response.data.choices[0].message.content.trim();
+            const descMatch = result.match(/Description:\s*([\s\S]*?)(?=\nKeywords:|$)/i);
+            const keywordsMatch = result.match(/Keywords:\s*([\s\S]*?)$/i);
+
+            if (!descMatch || !keywordsMatch) {
+                throw new Error('Invalid response format from AI');
+            }
+
+            return {
+                description: descMatch[1].trim(),
+                keywords: keywordsMatch[1].trim()
+            };
+
         } catch (error) {
             console.error('Error calling AI API:', error);
-            new Notice(`Failed to generate SEO ${type}. Please check your API settings and try again.`);
-            return '';
+            new Notice('Failed to generate SEO content. Please check your API settings and try again.');
+            return null;
         }
     }
 
@@ -173,12 +165,23 @@ class SEOSettingTab extends PluginSettingTab {
 
         new Setting(containerEl)
             .setName('OpenAI API Key')
-            .setDesc('Enter your OpenAI API key')
+            .setDesc('Enter your API key')
             .addText(text => text
                 .setPlaceholder('Enter your API key')
                 .setValue(this.plugin.settings.apiKey)
                 .onChange(async (value) => {
                     this.plugin.settings.apiKey = value;
+                    await this.plugin.saveSettings();
+                }));
+
+        new Setting(containerEl)
+            .setName('API URL')
+            .setDesc('The API endpoint URL (default is OpenAI, but you can use any compatible API)')
+            .addText(text => text
+                .setPlaceholder('https://api.openai.com/v1/chat/completions')
+                .setValue(this.plugin.settings.apiUrl)
+                .onChange(async (value) => {
+                    this.plugin.settings.apiUrl = value;
                     await this.plugin.saveSettings();
                 }));
 
@@ -195,43 +198,19 @@ class SEOSettingTab extends PluginSettingTab {
                 }));
 
         new Setting(containerEl)
-            .setName('Use Custom Prompts')
-            .setDesc('Enable to use custom prompts instead of default ones')
-            .addToggle(toggle => toggle
-                .setValue(this.plugin.settings.useCustomPrompts)
-                .onChange(async (value) => {
-                    this.plugin.settings.useCustomPrompts = value;
-                    await this.plugin.saveSettings();
-                }));
-
-        new Setting(containerEl)
-            .setName('Custom Description Prompt')
-            .setDesc('Custom system prompt for generating descriptions')
+            .setName('Custom Prompt')
+            .setDesc('Optional: Provide your own prompt for generating SEO content. Leave empty to use the default prompt. The response should follow the format: "Description: [content] Keywords: [content]"')
             .addTextArea(text => text
-                .setPlaceholder('Enter your custom prompt for descriptions')
-                .setValue(this.plugin.settings.customDescriptionPrompt)
+                .setPlaceholder('Enter your custom prompt')
+                .setValue(this.plugin.settings.customPrompt)
                 .onChange(async (value) => {
-                    this.plugin.settings.customDescriptionPrompt = value;
+                    this.plugin.settings.customPrompt = value;
                     await this.plugin.saveSettings();
                 }));
-
-        new Setting(containerEl)
-            .setName('Custom Keywords Prompt')
-            .setDesc('Custom system prompt for generating keywords')
-            .addTextArea(text => text
-                .setPlaceholder('Enter your custom prompt for keywords')
-                .setValue(this.plugin.settings.customKeywordsPrompt)
-                .onChange(async (value) => {
-                    this.plugin.settings.customKeywordsPrompt = value;
-                    await this.plugin.saveSettings();
-                }));
-
-        // Advanced Settings
-        containerEl.createEl('h3', { text: 'Advanced Settings' });
 
         new Setting(containerEl)
             .setName('Model')
-            .setDesc('OpenAI model to use')
+            .setDesc('The model to use (e.g., gpt-3.5-turbo)')
             .addText(text => text
                 .setPlaceholder('gpt-3.5-turbo')
                 .setValue(this.plugin.settings.model)
@@ -244,7 +223,7 @@ class SEOSettingTab extends PluginSettingTab {
             .setName('Max Tokens')
             .setDesc('Maximum number of tokens in the response')
             .addText(text => text
-                .setPlaceholder('150')
+                .setPlaceholder('500')
                 .setValue(String(this.plugin.settings.maxTokens))
                 .onChange(async (value) => {
                     const numValue = parseInt(value);

@@ -1,3 +1,13 @@
+/**
+ * SEO Friendly Description Generator
+ * An Obsidian plugin that generates SEO-friendly descriptions and keywords for markdown blog posts.
+ * 
+ * Features:
+ * - Generates SEO-friendly descriptions and keywords in Chinese or English
+ * - Supports custom prompts for description and keyword generation
+ * - Automatically updates frontmatter with generated content
+ */
+
 import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
 import axios from 'axios';
 
@@ -7,9 +17,10 @@ interface PluginSettings {
     model: string;
     maxTokens: number;
     temperature: number;
-    useAzure: boolean;
-    azureApiVersion: string;
-    azureDeploymentName: string;
+    language: 'zh' | 'en';
+    customDescriptionPrompt: string;
+    customKeywordsPrompt: string;
+    useCustomPrompts: boolean;
 }
 
 const DEFAULT_SETTINGS: PluginSettings = {
@@ -18,10 +29,34 @@ const DEFAULT_SETTINGS: PluginSettings = {
     model: 'gpt-3.5-turbo',
     maxTokens: 150,
     temperature: 0.8,
-    useAzure: false,
-    azureApiVersion: '2023-05-15',
-    azureDeploymentName: ''
+    language: 'zh',
+    customDescriptionPrompt: '',
+    customKeywordsPrompt: '',
+    useCustomPrompts: false
 }
+
+const DEFAULT_PROMPTS = {
+    description: {
+        zh: {
+            system: "你是一个SEO专家，请生成一段简洁、吸引人且对搜索引擎友好的中文描述，长度在100-150字之间。",
+            user: "请为以下内容生成描述：\n\n"
+        },
+        en: {
+            system: "You are an SEO expert. Generate a concise, engaging, and SEO-friendly description in English, between 50-80 words.",
+            user: "Generate a description for the following content:\n\n"
+        }
+    },
+    keywords: {
+        zh: {
+            system: "你是一个SEO专家，请生成5-8个相关的中文关键词，用逗号分隔。关键词应该准确反映内容主题，并具有搜索价值。",
+            user: "请为以下内容生成关键词：\n\n"
+        },
+        en: {
+            system: "You are an SEO expert. Generate 5-8 relevant English keywords, separated by commas. Keywords should accurately reflect the content and have search value.",
+            user: "Generate keywords for the following content:\n\n"
+        }
+    }
+};
 
 export default class SEOFriendlyDescriptionPlugin extends Plugin {
     settings: PluginSettings;
@@ -50,63 +85,77 @@ export default class SEOFriendlyDescriptionPlugin extends Plugin {
 
     async generateDescription(editor: Editor, view: MarkdownView) {
         const content = editor.getValue();
-        // 这里调用AI API生成描述
-        const description = await this.callAIAPI(content);
+        const description = await this.callAIAPI(content, 'description');
+        const keywords = await this.callAIAPI(content, 'keywords');
 
-        // 更新frontmatter
-        this.updateFrontmatter(editor, description);
+        if (description && keywords) {
+            this.updateFrontmatter(editor, description, keywords);
+        }
     }
 
-    async callAIAPI(content: string): Promise<string> {
+    async callAIAPI(content: string, type: 'description' | 'keywords'): Promise<string> {
         try {
-            let apiUrl = this.settings.apiUrl;
-            let headers: Record<string, string> = {
-                'Content-Type': 'application/json'
-            };
-            let data: Record<string, any> = {
-                messages: [
-                    { role: "system", content: "你是一个SEO专家，请你草拟一个对SEO友好的description标签内容，要考虑关键字、突出博客的实用性、概括博客的主要内容、description值的长度、以及在符合博客内容的前提使用吸引人的词语帮助提高点击率，但是要避免一直使用“深入”等词语看起来显得很资深的词语，这会用用户反感，你只需要输出description的值，不要输出html标签，也不需要任何说明和解释" },
-                    { role: "user", content: `请为如下内容生成SEO友好的description:\n\n${content}\n\n SEO Description:` }
-                ],
-                max_tokens: this.settings.maxTokens,
-                temperature: this.settings.temperature,
-            };
+            const { system: defaultSystemPrompt, user: defaultUserPrompt } = 
+                DEFAULT_PROMPTS[type][this.settings.language];
 
-            if (this.settings.useAzure) {
-                apiUrl += `openai/deployments/${this.settings.azureDeploymentName}/chat/completions?api-version=${this.settings.azureApiVersion}`;
-                headers['api-key'] = this.settings.apiKey;
-            } else {
-                headers['Authorization'] = `Bearer ${this.settings.apiKey}`;
-                data['model'] = this.settings.model;
-            }
+            const systemPrompt = this.settings.useCustomPrompts
+                ? (type === 'description' ? this.settings.customDescriptionPrompt : this.settings.customKeywordsPrompt)
+                : defaultSystemPrompt;
 
-            const response = await axios.post(apiUrl, data, { headers });
+            const messages = [
+                { role: "system", content: systemPrompt },
+                { role: "user", content: defaultUserPrompt + content }
+            ];
+
+            const response = await axios.post(
+                this.settings.apiUrl,
+                {
+                    model: this.settings.model,
+                    messages: messages,
+                    max_tokens: this.settings.maxTokens,
+                    temperature: this.settings.temperature,
+                },
+                {
+                    headers: {
+                        'Authorization': `Bearer ${this.settings.apiKey}`,
+                        'Content-Type': 'application/json'
+                    }
+                }
+            );
 
             return response.data.choices[0].message.content.trim();
         } catch (error) {
             console.error('Error calling AI API:', error);
-            new Notice('Failed to generate SEO description. Please check your API settings and try again.');
+            new Notice(`Failed to generate SEO ${type}. Please check your API settings and try again.`);
             return '';
         }
     }
 
-    updateFrontmatter(editor: Editor, description: string) {
+    updateFrontmatter(editor: Editor, description: string, keywords: string) {
         const content = editor.getValue();
         const frontmatterRegex = /^---\n([\s\S]*?)\n---/;
         const frontmatterMatch = content.match(frontmatterRegex);
-
+    
+        let newContent: string;
         if (frontmatterMatch) {
-            const frontmatter = frontmatterMatch[1];
-            const updatedFrontmatter = frontmatter.includes('description:')
-                ? frontmatter.replace(/description:.*/, `description: "${description}"`)
-                : `${frontmatter}\ndescription: "${description}"`;
-
-            editor.setValue(content.replace(frontmatterRegex, `---\n${updatedFrontmatter}\n---`));
+            let frontmatter = frontmatterMatch[1];
+            frontmatter = this.updateFrontmatterField(frontmatter, 'description', description);
+            frontmatter = this.updateFrontmatterField(frontmatter, 'keywords', keywords);
+            newContent = content.replace(frontmatterRegex, `---\n${frontmatter}\n---`);
         } else {
-            editor.setValue(`---\ndescription: "${description}"\n---\n\n${content}`);
+            newContent = `---\ndescription: "${description}"\nkeywords: "${keywords}"\n---\n\n${content}`;
         }
+    
+        editor.setValue(newContent);
+        new Notice('SEO description and keywords updated successfully!');
+    }
 
-        new Notice('SEO description generated and added to frontmatter.');
+    private updateFrontmatterField(frontmatter: string, field: string, value: string): string {
+        const fieldRegex = new RegExp(`${field}:.*(\n|$)`);
+        if (frontmatter.includes(`${field}:`)) {
+            return frontmatter.replace(fieldRegex, `${field}: "${value}"`);
+        }
+        return `${frontmatter}\n${field}: "${value}"`;
     }
 }
 
@@ -121,22 +170,10 @@ class SEOSettingTab extends PluginSettingTab {
     display(): void {
         const { containerEl } = this;
         containerEl.empty();
-        containerEl.createEl('h2', { text: 'SEO-Friendly Description Generator Settings' });
 
         new Setting(containerEl)
-            .setName('Use Azure OpenAI')
-            .setDesc('Toggle to use Azure OpenAI instead of regular OpenAI')
-            .addToggle(toggle => toggle
-                .setValue(this.plugin.settings.useAzure)
-                .onChange(async (value) => {
-                    this.plugin.settings.useAzure = value;
-                    await this.plugin.saveSettings();
-                    this.display(); // Refresh the settings page
-                }));
-
-        new Setting(containerEl)
-            .setName('API Key')
-            .setDesc('Enter your AI API key')
+            .setName('OpenAI API Key')
+            .setDesc('Enter your OpenAI API key')
             .addText(text => text
                 .setPlaceholder('Enter your API key')
                 .setValue(this.plugin.settings.apiKey)
@@ -146,59 +183,71 @@ class SEOSettingTab extends PluginSettingTab {
                 }));
 
         new Setting(containerEl)
-            .setName('API URL')
-            .setDesc('Enter the API endpoint URL')
-            .addText(text => text
-                .setPlaceholder(this.plugin.settings.useAzure ? 'https://<your-resource-name>.openai.azure.com/' : 'https://api.openai.com/v1/chat/completions')
-                .setValue(this.plugin.settings.apiUrl)
-                .onChange(async (value) => {
-                    this.plugin.settings.apiUrl = value;
+            .setName('Language')
+            .setDesc('Choose the output language for SEO content')
+            .addDropdown(dropdown => dropdown
+                .addOption('zh', '中文')
+                .addOption('en', 'English')
+                .setValue(this.plugin.settings.language)
+                .onChange(async (value: 'zh' | 'en') => {
+                    this.plugin.settings.language = value;
                     await this.plugin.saveSettings();
                 }));
 
-        if (this.plugin.settings.useAzure) {
-            new Setting(containerEl)
-                .setName('Azure API Version')
-                .setDesc('Enter the Azure OpenAI API version')
-                .addText(text => text
-                    .setPlaceholder('2023-05-15')
-                    .setValue(this.plugin.settings.azureApiVersion)
-                    .onChange(async (value) => {
-                        this.plugin.settings.azureApiVersion = value;
-                        await this.plugin.saveSettings();
-                    }));
+        new Setting(containerEl)
+            .setName('Use Custom Prompts')
+            .setDesc('Enable to use custom prompts instead of default ones')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.useCustomPrompts)
+                .onChange(async (value) => {
+                    this.plugin.settings.useCustomPrompts = value;
+                    await this.plugin.saveSettings();
+                }));
 
-            new Setting(containerEl)
-                .setName('Azure Deployment Name')
-                .setDesc('Enter your Azure OpenAI deployment name')
-                .addText(text => text
-                    .setPlaceholder('Enter deployment name')
-                    .setValue(this.plugin.settings.azureDeploymentName)
-                    .onChange(async (value) => {
-                        this.plugin.settings.azureDeploymentName = value;
-                        await this.plugin.saveSettings();
-                    }));
-        } else {
-            new Setting(containerEl)
-                .setName('Model')
-                .setDesc('Enter the model name')
-                .addText(text => text
-                    .setPlaceholder('gpt-3.5-turbo')
-                    .setValue(this.plugin.settings.model)
-                    .onChange(async (value) => {
-                        this.plugin.settings.model = value;
-                        await this.plugin.saveSettings();
-                    }));
-        }
+        new Setting(containerEl)
+            .setName('Custom Description Prompt')
+            .setDesc('Custom system prompt for generating descriptions')
+            .addTextArea(text => text
+                .setPlaceholder('Enter your custom prompt for descriptions')
+                .setValue(this.plugin.settings.customDescriptionPrompt)
+                .onChange(async (value) => {
+                    this.plugin.settings.customDescriptionPrompt = value;
+                    await this.plugin.saveSettings();
+                }));
+
+        new Setting(containerEl)
+            .setName('Custom Keywords Prompt')
+            .setDesc('Custom system prompt for generating keywords')
+            .addTextArea(text => text
+                .setPlaceholder('Enter your custom prompt for keywords')
+                .setValue(this.plugin.settings.customKeywordsPrompt)
+                .onChange(async (value) => {
+                    this.plugin.settings.customKeywordsPrompt = value;
+                    await this.plugin.saveSettings();
+                }));
+
+        // Advanced Settings
+        containerEl.createEl('h3', { text: 'Advanced Settings' });
+
+        new Setting(containerEl)
+            .setName('Model')
+            .setDesc('OpenAI model to use')
+            .addText(text => text
+                .setPlaceholder('gpt-3.5-turbo')
+                .setValue(this.plugin.settings.model)
+                .onChange(async (value) => {
+                    this.plugin.settings.model = value;
+                    await this.plugin.saveSettings();
+                }));
 
         new Setting(containerEl)
             .setName('Max Tokens')
-            .setDesc('Maximum number of tokens to generate')
+            .setDesc('Maximum number of tokens in the response')
             .addText(text => text
-                .setPlaceholder('60')
+                .setPlaceholder('150')
                 .setValue(String(this.plugin.settings.maxTokens))
                 .onChange(async (value) => {
-                    const numValue = Number(value);
+                    const numValue = parseInt(value);
                     if (!isNaN(numValue)) {
                         this.plugin.settings.maxTokens = numValue;
                         await this.plugin.saveSettings();
@@ -207,7 +256,7 @@ class SEOSettingTab extends PluginSettingTab {
 
         new Setting(containerEl)
             .setName('Temperature')
-            .setDesc('Controls randomness (0.0-1.0)')
+            .setDesc('Controls randomness in the response (0-1)')
             .addSlider(slider => slider
                 .setLimits(0, 1, 0.1)
                 .setValue(this.plugin.settings.temperature)
